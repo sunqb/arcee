@@ -1,0 +1,30 @@
+services:
+  arcee-signup:
+    build: .
+    image: arcee:local
+    command: ["-mode", "signup", "-count", "${SIGNUP_COUNT:-1}", "-config", "/app/config.json"]
+    environment:
+      - TZ=Asia/Shanghai
+    volumes:
+      - tokens:/app/tokens
+      - ./config.json:/app/config.json:ro
+    restart: "no"
+
+  arcee-server:
+    build: .
+    image: arcee:local
+    command: ["-mode", "serve", "-config", "/app/config.json"]
+    environment:
+      - TZ=Asia/Shanghai
+    volumes:
+      - tokens:/app/tokens
+      - ./config.json:/app/config.json:ro
+    ports:
+      - "${LISTEN_PORT:-8787}:8787"
+    depends_on:
+      arcee-signup:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+volumes:
+  tokens:
