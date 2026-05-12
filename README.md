@@ -1,6 +1,6 @@
 # Arcee Bridge
 
-> 自动注册 Arcee 账号，并将会话能力暴露为 OpenAI 兼容接口。支持批量注册多账号、RoundRobin 负载均衡，以及 Docker Compose 一键部署。
+> 自动注册 Arcee 账号，并将会话能力暴露为 OpenAI 兼容接口。支持批量注册多账号、RoundRobin 负载均衡、Token 自动刷新，以及 Docker Compose 一键部署。
 
 ## 社区友链
 
@@ -17,7 +17,20 @@
 
 完整链路：
 
-`创建邮箱 -> 注册账号 -> 收取验证邮件 -> 访问验证链接 -> 登录 -> 保存 access_token -> 启动 OpenAI 兼容网关`
+```
+创建邮箱 → 注册账号 → 收取验证邮件 → 访问验证链接 → 登录 → 保存 access_token → 启动 OpenAI 兼容网关
+```
+
+### 核心特性
+
+| 特性 | 说明 |
+| --- | --- |
+| **自动注册** | 调用 YYDS Mail API 创建邮箱，全自动完成 Arcee 注册与验证 |
+| **批量账号** | `-count N` 一次注册多个账号 |
+| **RoundRobin** | 多账号均衡分发请求，提升并发能力 |
+| **Token 自动刷新** | 遇到 401 自动用存储的 email/password 重新登录，更新 token 后透明重试，无需人工介入 |
+| **流式响应** | 原生支持 `stream: true`，token-by-token 实时推送 |
+| **OpenAI 兼容** | 直接对接 ChatBox、Open WebUI、Continue 等任意 OpenAI 客户端 |
 
 ---
 
@@ -38,8 +51,8 @@ ARCEE_SIGNUP_API_KEY=your_yydsmail_api_key
 # 注册账号数量
 SIGNUP_COUNT=3
 
-# 本地 Bearer 鉴权 Key
-ARCEE_OPENAI_API_KEY=daiju
+# 本地 Bearer 鉴权 Key（客户端请求时需携带）
+ARCEE_OPENAI_API_KEY=your-secret-key
 
 # 对外端口
 LISTEN_PORT=8787
@@ -93,24 +106,35 @@ docker-compose restart arcee-server
 ### 1. 注册账号
 
 ```bash
-# 通过环境变量配置
 export ARCEE_SIGNUP_API_KEY=your_key
 
-go run .                        # 注册 1 个账号
-go run . -count 3               # 批量注册 3 个账号
+go run .           # 注册 1 个账号
+go run . -count 3  # 批量注册 3 个账号
 ```
 
-注册成功后 token 写入 `tokens/` 目录。
+注册成功后 token 写入 `tokens/` 目录（含 email/password，供自动刷新使用）。
 
 ### 2. 启动服务
 
 ```bash
-export ARCEE_OPENAI_API_KEY=daiju
+export ARCEE_OPENAI_API_KEY=your-secret-key
 
 go run . -mode serve
 ```
 
 默认监听 `http://0.0.0.0:8787`，自动加载 `tokens/` 目录下所有 token。
+
+---
+
+## Token 自动刷新
+
+每个 token 文件除 `access_token` 外，还保存了 `email` 和 `password`。当服务收到 Arcee 返回的 `401 Unauthorized` 时，会自动执行以下流程，**对调用方完全透明**：
+
+```
+请求 → 401 → 用 email/password 重新登录 → 更新内存 token + 写回文件 → 重试原请求
+```
+
+> 使用 `ARCEE_ACCESS_TOKEN` 环境变量注入的单个 token 无 email/password，无法自动刷新，遇 401 仍会返回错误。建议通过 `tokens/` 目录管理账号以获得完整的自动刷新能力。
 
 ---
 
@@ -120,22 +144,22 @@ go run . -mode serve
 arcee/
 ├── main.go               # 入口，参数解析与模式分发
 ├── signup.go             # 注册工作流（支持 -count N 批量）
-├── server.go             # OpenAI 兼容网关，RoundRobin 多 token
+├── server.go             # OpenAI 兼容网关，RoundRobin + Token 自动刷新
 ├── config/
-│   └── config.go         # 配置加载，LoadAllTokensFromDir
+│   └── config.go         # 配置加载，LoadAllTokenFilesFromDir
 ├── arcee/
-│   ├── client.go
-│   ├── flow.go
-│   └── chat.go
+│   ├── client.go         # Arcee API 客户端（登录、注册、聊天）
+│   ├── flow.go           # 注册完整流程编排
+│   └── chat.go           # CreateChat / 流式响应
 ├── yydsmail/
 │   ├── client.go
 │   ├── mailbox.go
 │   ├── messages.go
 │   └── inspect.go
-├── Dockerfile            # 多阶段构建，distroless 基础镜像
+├── Dockerfile            # 多阶段构建，distroless 基础镜像，linux/amd64
 ├── docker-compose.yml    # signup + server 服务编排
 ├── .env.example          # 环境变量模板
-├── config.json.ex        # 配置文件模板
+├── config.json.ex        # 配置文件模板（可选）
 └── tokens/               # token 存储目录（gitignore）
 ```
 
@@ -154,7 +178,7 @@ arcee/
 | `ARCEE_OPENAI_API_KEY` | 本地 Bearer Key，为空则不校验 | — |
 | `ARCEE_LISTEN` | 服务监听地址 | `0.0.0.0:8787` |
 | `ARCEE_BASE_MODEL` | 默认模型名 | `trinity-large-thinking` |
-| `ARCEE_ACCESS_TOKEN` | 手动指定单个 token（有 `tokens/` 时忽略） | — |
+| `ARCEE_ACCESS_TOKEN` | 手动指定单个 token（有 `tokens/` 时忽略，无法自动刷新） | — |
 | `SIGNUP_COUNT` | 批量注册账号数量 | `1` |
 | `LISTEN_PORT` | 宿主机对外端口 | `8787` |
 
@@ -177,22 +201,25 @@ cp config.json.ex config.json
 | `GET` | `/healthz` | 健康检查 |
 | `GET` | `/models` | 模型列表 |
 | `GET` | `/v1/models` | OpenAI 风格模型列表 |
-| `POST` | `/v1/chat/completions` | 聊天补全 |
+| `POST` | `/v1/chat/completions` | 聊天补全（支持流式） |
 
 ```bash
+# 健康检查
+curl http://127.0.0.1:8787/healthz
+
 # 模型列表
 curl http://127.0.0.1:8787/v1/models \
-  -H "Authorization: Bearer daiju"
+  -H "Authorization: Bearer your-secret-key"
 
-# 聊天
+# 普通聊天
 curl http://127.0.0.1:8787/v1/chat/completions \
-  -H "Authorization: Bearer daiju" \
+  -H "Authorization: Bearer your-secret-key" \
   -H "Content-Type: application/json" \
   -d '{"model":"trinity-mini","messages":[{"role":"user","content":"hello"}]}'
 
-# 流式
+# 流式聊天
 curl http://127.0.0.1:8787/v1/chat/completions \
-  -H "Authorization: Bearer daiju" \
+  -H "Authorization: Bearer your-secret-key" \
   -H "Content-Type: application/json" \
   -d '{"model":"trinity-large-thinking","stream":true,"messages":[{"role":"user","content":"hello"}]}'
 ```
@@ -201,17 +228,19 @@ curl http://127.0.0.1:8787/v1/chat/completions \
 
 ## 模型支持
 
-- `trinity-mini`
-- `trinity-large-preview`
-- `trinity-large-thinking`
+| 模型 | 说明 |
+| --- | --- |
+| `trinity-mini` | 轻量快速 |
+| `trinity-large-preview` | 大模型预览版 |
+| `trinity-large-thinking` | 大模型推理版（默认） |
 
 ---
 
 ## 安全提示
 
 - 不要提交 `config.json` 和 `tokens/` 目录（已加入 `.gitignore`）
-- `access_token` 有时效，不是永久凭证
-- 监听 `0.0.0.0` 时务必配置 `server.openai_api_key`
+- `access_token` 有时效，服务已内置自动刷新，无需手动更换
+- 监听 `0.0.0.0` 时务必配置 `ARCEE_OPENAI_API_KEY`
 
 ---
 
