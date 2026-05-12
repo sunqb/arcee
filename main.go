@@ -10,6 +10,7 @@ import (
 func main() {
 	configFile := flag.String("config", appconfig.DefaultConfigPath, "path to config file")
 	mode := flag.String("mode", "", "run mode: signup or serve")
+	count := flag.Int("count", 1, "number of accounts to register in signup mode")
 	flag.Parse()
 
 	cfg, err := appconfig.Load(*configFile)
@@ -21,6 +22,6 @@ func main() {
 	case "serve":
 		runServer(cfg)
 	default:
-		runSignup(cfg)
+		runSignup(cfg, *count)
 	}
 }
