@@ -129,3 +129,36 @@ func LoadAccessTokenFile(path string) (*AccessTokenFile, error) {
 	}
 	return &saved, nil
 }
+
+const DefaultTokensDir = "tokens"
+
+// LoadAllTokensFromDir 扫描指定目录，返回所有有效 access_token 列表。
+// 文件必须是合法的 AccessTokenFile JSON 且 access_token 非空。
+// 若目录不存在或为空，返回空切片和 nil error。
+func LoadAllTokensFromDir(dir string) ([]string, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("read tokens dir %s: %w", dir, err)
+	}
+
+	var tokens []string
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		if !strings.HasSuffix(name, ".json") {
+			continue
+		}
+		path := dir + "/" + name
+		tf, err := LoadAccessTokenFile(path)
+		if err != nil {
+			continue // 跳过损坏文件
+		}
+		tokens = append(tokens, tf.AccessToken)
+	}
+	return tokens, nil
+}
