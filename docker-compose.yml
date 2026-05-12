@@ -1,7 +1,6 @@
 services:
   arcee-signup:
-    build: .
-    image: arcee:local
+    image: sunqb/arcee:latest
     command: ["-mode", "signup", "-count", "${SIGNUP_COUNT:-1}", "-config", "/app/config.json"]
     environment:
       - TZ=Asia/Shanghai
@@ -11,8 +10,7 @@ services:
     restart: "no"
 
   arcee-server:
-    build: .
-    image: arcee:local
+    image: sunqb/arcee:latest
     command: ["-mode", "serve", "-config", "/app/config.json"]
     environment:
       - TZ=Asia/Shanghai
