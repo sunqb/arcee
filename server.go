@@ -9,6 +9,7 @@ import (
 	"log"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"arcee/arcee"
@@ -52,11 +53,42 @@ type assistantMessage struct {
 	ToolCalls []openAIToolCall `json:"tool_calls,omitempty"`
 }
 
+// tokenPool 线程安全的 RoundRobin token 池
+type tokenPool struct {
+	tokens  []string
+	counter atomic.Uint64
+}
+
+func newTokenPool(tokens []string) *tokenPool {
+	return &tokenPool{tokens: tokens}
+}
+
+func (p *tokenPool) next() string {
+	if len(p.tokens) == 0 {
+		return ""
+	}
+	idx := p.counter.Add(1) - 1
+	return p.tokens[idx%uint64(len(p.tokens))]
+}
+
 func runServer(cfg *appconfig.Config) {
-	accessToken, err := cfg.Server.ResolvedAccessToken()
+	// 优先从 tokens/ 目录加载多个 token
+	tokens, err := appconfig.LoadAllTokensFromDir(appconfig.DefaultTokensDir)
 	if err != nil {
 		log.Fatal(err)
 	}
+
+	// fallback：tokens 目录为空时，读取单个 access_token（兼容旧方式）
+	if len(tokens) == 0 {
+		single, err := cfg.Server.ResolvedAccessToken()
+		if err != nil {
+			log.Fatal("no tokens found: either populate tokens/ dir or set access_token in config")
+		}
+		tokens = []string{single}
+	}
+
+	log.Printf("loaded %d token(s)", len(tokens))
+	pool := newTokenPool(tokens)
 
 	httpClient := &http.Client{Timeout: 60 * time.Second}
 	arceeClient := arcee.NewClient(arcee.WithHTTPClient(httpClient))
@@ -94,7 +126,7 @@ func runServer(cfg *appconfig.Config) {
 		if !authorize(cfg.Server, w, r) {
 			return
 		}
-		handleChatCompletions(cfg.Server, accessToken, arceeClient, w, r)
+		handleChatCompletions(cfg.Server, pool.next(), arceeClient, w, r)
 	})
 
 	server := &http.Server{
