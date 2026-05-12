@@ -23,34 +23,29 @@
 
 ## Docker Compose 部署（推荐）
 
-### 1. 准备配置文件
+### 1. 准备 .env 文件
 
 ```bash
-cp config.json.ex config.json   # 填入 signup.api_key
-cp .env.example .env             # 设置注册账号数量
+cp .env.example .env
 ```
 
-`config.json` 关键字段：
-
-```json
-{
-  "signup": {
-    "api_key": "你的YYDS邮箱密钥",
-    "domain": "xiaodai.eu.cc"
-  },
-  "server": {
-    "listen": "0.0.0.0:8787",
-    "openai_api_key": "daiju"
-  }
-}
-```
-
-`.env` 示例：
+编辑 `.env`，填入必要配置：
 
 ```env
-SIGNUP_COUNT=3      # 注册账号数量
-LISTEN_PORT=8787    # 对外端口
+# 必填：YYDS Mail 密钥
+ARCEE_SIGNUP_API_KEY=your_yydsmail_api_key
+
+# 注册账号数量
+SIGNUP_COUNT=3
+
+# 本地 Bearer 鉴权 Key
+ARCEE_OPENAI_API_KEY=daiju
+
+# 对外端口
+LISTEN_PORT=8787
 ```
+
+> 不需要 `config.json`，所有配置均通过环境变量注入。
 
 ### 2. 一键启动
 
@@ -87,7 +82,7 @@ arcee-server-1  | openai-compatible gateway listening on http://0.0.0.0:8787
 tokens 已持久化在 volume，追加注册不影响已有账号：
 
 ```bash
-docker-compose run --rm arcee-signup -mode signup -count 5 -config /app/config.json
+docker-compose run --rm -e SIGNUP_COUNT=5 arcee-signup -mode signup -count 5
 docker-compose restart arcee-server
 ```
 
@@ -98,6 +93,9 @@ docker-compose restart arcee-server
 ### 1. 注册账号
 
 ```bash
+# 通过环境变量配置
+export ARCEE_SIGNUP_API_KEY=your_key
+
 go run .                        # 注册 1 个账号
 go run . -count 3               # 批量注册 3 个账号
 ```
@@ -107,6 +105,8 @@ go run . -count 3               # 批量注册 3 个账号
 ### 2. 启动服务
 
 ```bash
+export ARCEE_OPENAI_API_KEY=daiju
+
 go run . -mode serve
 ```
 
@@ -143,35 +143,30 @@ arcee/
 
 ## 配置说明
 
-配置文件 `config.json`（从 `config.json.ex` 复制）：
+所有配置优先读取环境变量，其次读取 `config.json`（可选）。
 
-```json
-{
-  "mode": "signup",
-  "signup": {
-    "api_key": "你的YYDS邮箱密钥",
-    "domain": "xiaodai.eu.cc"
-  },
-  "server": {
-    "access_token": "",
-    "listen": "0.0.0.0:8787",
-    "openai_api_key": "daiju",
-    "base_model_name": "trinity-large-thinking",
-    "enabled_tools": ["web_search"]
-  }
-}
+### 环境变量
+
+| 环境变量 | 说明 | 默认值 |
+| --- | --- | --- |
+| `ARCEE_SIGNUP_API_KEY` | YYDS Mail 密钥（注册模式必填） | — |
+| `ARCEE_SIGNUP_DOMAIN` | 注册邮箱域名 | `xiaodai.eu.cc` |
+| `ARCEE_OPENAI_API_KEY` | 本地 Bearer Key，为空则不校验 | — |
+| `ARCEE_LISTEN` | 服务监听地址 | `0.0.0.0:8787` |
+| `ARCEE_BASE_MODEL` | 默认模型名 | `trinity-large-thinking` |
+| `ARCEE_ACCESS_TOKEN` | 手动指定单个 token（有 `tokens/` 时忽略） | — |
+| `SIGNUP_COUNT` | 批量注册账号数量 | `1` |
+| `LISTEN_PORT` | 宿主机对外端口 | `8787` |
+
+### config.json（可选）
+
+若需要使用配置文件，从模板复制：
+
+```bash
+cp config.json.ex config.json
 ```
 
-| 字段 | 说明 |
-| --- | --- |
-| `mode` | 默认运行模式，`signup` / `serve` |
-| `signup.api_key` | YYDS Mail 密钥 |
-| `signup.domain` | 邮箱域名 |
-| `server.access_token` | 手动指定单个 token（兼容旧方式，优先读 `tokens/` 目录） |
-| `server.listen` | 服务监听地址 |
-| `server.openai_api_key` | 本地 Bearer Key，为空则不校验 |
-| `server.base_model_name` | 默认模型名 |
-| `server.enabled_tools` | 传给 Arcee 的工具开关 |
+环境变量优先级高于 `config.json`，Docker 部署时无需挂载配置文件。
 
 ---
 

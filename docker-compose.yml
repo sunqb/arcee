@@ -1,22 +1,26 @@
 services:
   arcee-signup:
     image: sunqb/arcee:latest
-    command: ["-mode", "signup", "-count", "${SIGNUP_COUNT:-1}", "-config", "/app/config.json"]
+    command: ["-mode", "signup", "-count", "${SIGNUP_COUNT:-1}"]
     environment:
       - TZ=Asia/Shanghai
+      - ARCEE_SIGNUP_API_KEY=${ARCEE_SIGNUP_API_KEY}
+      - ARCEE_SIGNUP_DOMAIN=${ARCEE_SIGNUP_DOMAIN:-xiaodai.eu.cc}
     volumes:
       - tokens:/app/tokens
-      - ./config.json:/app/config.json:ro
     restart: "no"
 
   arcee-server:
     image: sunqb/arcee:latest
-    command: ["-mode", "serve", "-config", "/app/config.json"]
+    command: ["-mode", "serve"]
     environment:
       - TZ=Asia/Shanghai
+      - ARCEE_OPENAI_API_KEY=${ARCEE_OPENAI_API_KEY}
+      - ARCEE_LISTEN=0.0.0.0:8787
+      - ARCEE_BASE_MODEL=${ARCEE_BASE_MODEL:-trinity-large-thinking}
+      - ARCEE_ACCESS_TOKEN=${ARCEE_ACCESS_TOKEN:-}
     volumes:
       - tokens:/app/tokens
-      - ./config.json:/app/config.json:ro
     ports:
       - "${LISTEN_PORT:-8787}:8787"
     depends_on:
