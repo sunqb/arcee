@@ -115,6 +115,20 @@ func (e *tokenEntry) createChat(ctx context.Context, client *arcee.Client, req a
 	return result, err
 }
 
+// createChatStream 流式调用，遇 401 时自动刷新 token 并重试一次。
+// 401 在第一个 chunk 发出前检测，重试安全。
+func (e *tokenEntry) createChatStream(ctx context.Context, client *arcee.Client, req arcee.CreateChatRequest, onChunk func(string)) (*arcee.CreateChatResult, error) {
+	result, err := client.CreateChatStream(ctx, e.currentToken(), req, onChunk)
+	if err != nil && isUnauthorized(err) {
+		if refreshErr := e.refreshToken(ctx, client); refreshErr != nil {
+			log.Printf("token refresh failed: %v", refreshErr)
+			return nil, err
+		}
+		result, err = client.CreateChatStream(ctx, e.currentToken(), req, onChunk)
+	}
+	return result, err
+}
+
 func isUnauthorized(err error) bool {
 	return err != nil && strings.Contains(err.Error(), "status=401")
 }
@@ -261,7 +275,7 @@ func handleChatCompletions(cfg appconfig.ServerConfig, entry *tokenEntry, client
 				if execErr == nil {
 					followupMessages := appendToolMessages(req.Messages, toolCalls, toolMessages)
 					finalPrompt := buildConversationPrompt(followupMessages)
-					finalResult, finalErr := entry.createChat(ctx, client, arcee.CreateChatRequest{
+					finalReq := arcee.CreateChatRequest{
 						Message:            finalPrompt,
 						Title:              buildTitle(req.Messages),
 						BaseModelName:      modelName,
@@ -269,12 +283,13 @@ func handleChatCompletions(cfg appconfig.ServerConfig, entry *tokenEntry, client
 						FileReferences:     []any{},
 						Temperature:        temp,
 						ProviderPreference: nil,
-					})
+					}
+					if req.Stream {
+						streamChatToClient(ctx, w, entry, client, finalReq, modelName)
+						return
+					}
+					finalResult, finalErr := entry.createChat(ctx, client, finalReq)
 					if finalErr == nil {
-						if req.Stream {
-							writeStreamResponse(w, modelName, finalResult)
-							return
-						}
 						writeJSON(w, http.StatusOK, chatCompletionsResponse{
 							ID:      "chatcmpl-" + shortID(),
 							Object:  "chat.completion",
@@ -337,7 +352,7 @@ func handleChatCompletions(cfg appconfig.ServerConfig, entry *tokenEntry, client
 		}
 	}
 
-	result, err := entry.createChat(ctx, client, arcee.CreateChatRequest{
+	mainReq := arcee.CreateChatRequest{
 		Message:            prompt,
 		Title:              buildTitle(req.Messages),
 		BaseModelName:      modelName,
@@ -345,14 +360,14 @@ func handleChatCompletions(cfg appconfig.ServerConfig, entry *tokenEntry, client
 		FileReferences:     []any{},
 		Temperature:        temp,
 		ProviderPreference: nil,
-	})
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadGateway)
+	}
+	if req.Stream {
+		streamChatToClient(ctx, w, entry, client, mainReq, modelName)
 		return
 	}
-
-	if req.Stream {
-		writeStreamResponse(w, modelName, result)
+	result, err := entry.createChat(ctx, client, mainReq)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
 	}
 
@@ -463,6 +478,50 @@ func firstNRunes(value string, limit int) string {
 		return value
 	}
 	return string(runes[:limit])
+}
+
+// streamChatToClient 真正的流式转发：调用 CreateChatStream，
+// 每个 onChunk 回调立即写一个 SSE delta event 并 flush。
+func streamChatToClient(ctx context.Context, w http.ResponseWriter, entry *tokenEntry, client *arcee.Client, req arcee.CreateChatRequest, model string) {
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "streaming unsupported", http.StatusInternalServerError)
+		return
+	}
+
+	id := "chatcmpl-" + shortID()
+	created := time.Now().Unix()
+	sentRole := false
+
+	_, err := entry.createChatStream(ctx, client, req, func(chunk string) {
+		if !sentRole {
+			writeSSE(w, chatCompletionsResponse{
+				ID: id, Object: "chat.completion.chunk", Created: created, Model: model,
+				Choices: []chatCompletionChoice{{Index: 0, Delta: assistantMessage{Role: "assistant"}}},
+			})
+			sentRole = true
+		}
+		writeSSE(w, chatCompletionsResponse{
+			ID: id, Object: "chat.completion.chunk", Created: created, Model: model,
+			Choices: []chatCompletionChoice{{Index: 0, Delta: assistantMessage{Content: chunk}}},
+		})
+	})
+	if err != nil {
+		writeSSE(w, map[string]any{"error": err.Error()})
+		flusher.Flush()
+		return
+	}
+
+	writeSSE(w, chatCompletionsResponse{
+		ID: id, Object: "chat.completion.chunk", Created: created, Model: model,
+		Choices: []chatCompletionChoice{{Index: 0, Delta: assistantMessage{}, FinishReason: "stop"}},
+	})
+	_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
+	flusher.Flush()
 }
 
 func writeStreamResponse(w http.ResponseWriter, model string, result *arcee.CreateChatResult) {
