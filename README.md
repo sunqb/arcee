@@ -29,7 +29,7 @@
 | **批量账号** | `-count N` 一次注册多个账号 |
 | **RoundRobin** | 多账号均衡分发请求，提升并发能力 |
 | **Token 自动刷新** | 遇到 401 自动用存储的 email/password 重新登录，更新 token 后透明重试，无需人工介入 |
-| **流式响应** | 原生支持 `stream: true`，token-by-token 实时推送 |
+| **真流式响应** | 原生支持 `stream: true`，逐行实时推送，不等全量返回 |
 | **OpenAI 兼容** | 直接对接 ChatBox、Open WebUI、Continue 等任意 OpenAI 客户端 |
 
 ---
@@ -123,6 +123,20 @@ go run . -mode serve
 ```
 
 默认监听 `http://0.0.0.0:8787`，自动加载 `tokens/` 目录下所有 token。
+
+---
+
+## 流式响应
+
+`stream: true` 时走真正的流式路径，不等全量返回：
+
+```
+Arcee API ──逐行──▶ CreateChatStream ──onChunk──▶ SSE delta ──▶ 客户端
+```
+
+- 首个 chunk 先发 `role: assistant` delta，后续每个 chunk 发 `content` delta
+- 401 在第一个 chunk 发出前检测，自动刷新 token 后透明重试
+- 流式与非流式共用同一套 401 自动刷新机制
 
 ---
 
